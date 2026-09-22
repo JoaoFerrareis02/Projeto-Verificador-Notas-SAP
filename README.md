@@ -1,6 +1,6 @@
 # Z_VERIF_NOTAS: Verificação de Notas SAP e da sua cadeia de pré-requisitos
 
-Programa ABAP que recebe uma lista de Notas SAP e mostra, em uma única tela, todas as notas das quais cada uma depende, na ordem em que devem ser implementadas, junto com o status atual de cada nota no sistema.
+Programa ABAP que recebe uma lista de Notas SAP e mostra, em uma única tela, todas as notas das quais cada uma depende, na ordem em que devem ser implementadas. Para cada nota, exibe o status atual no sistema e indica se ela exige atividades manuais antes ou depois da implementação.
 
 ![ABAP](https://img.shields.io/badge/ABAP-7.50%2B-0FAAFF?logo=sap&logoColor=white)
 ![Testes](https://img.shields.io/badge/testes-ABAP%20Unit-2ea44f)
@@ -24,22 +24,27 @@ Programa ABAP que recebe uma lista de Notas SAP e mostra, em uma única tela, to
 
 ### Problema
 
-Antes de implementar uma Nota SAP pela transação SNOTE, é preciso saber quais outras notas ela exige como pré-requisito. Essas dependências formam uma árvore: um pré-requisito pode ter seus próprios pré-requisitos. Verificar isso nota a nota, e conferir o status de cada uma, é um trabalho manual, lento e sujeito a erro, principalmente quando várias notas são analisadas ao mesmo tempo.
+Antes de implementar uma Nota SAP pela transação SNOTE, é preciso saber quais outras notas ela exige como pré-requisito. Essas dependências formam uma árvore: um pré-requisito pode ter seus próprios pré-requisitos. Verificar isso nota a nota é um trabalho manual, lento e sujeito a erro, principalmente quando várias notas são analisadas ao mesmo tempo. O mesmo vale para conferir o status de cada nota e descobrir quais exigem passos manuais, como ajustes de customizing ou criação de objetos no dicionário.
 
 ### Solução
 
-O `Z_VERIF_NOTAS` automatiza essa análise. Para cada nota informada, o programa busca a árvore completa de pré-requisitos (diretos e indiretos), ordena as notas pela ordem de implementação e exibe tudo em um relatório ALV com os status de implementação e de processamento, conforme a SNOTE.
+O `Z_VERIF_NOTAS` automatiza essa análise. Para cada nota informada, o programa faz três coisas:
+
+1. Busca a árvore completa de pré-requisitos, diretos e indiretos.
+2. Ordena as notas pela ordem de implementação.
+3. Exibe tudo em um relatório ALV com os status de implementação e de processamento, conforme a SNOTE, e com a indicação de atividades manuais pré e pós-implementação.
 
 ### Principais funcionalidades
 
 - Seleção de notas por valores individuais, intervalos, padrões e exclusões.
-- Inclusão de notas informadas que ainda não foram carregadas no sistema, identificadas como "Nota não carregada no sistema".
+- Inclusão de notas informadas que ainda não foram carregadas no sistema, identificadas como "Nota não carregada no sistema". Para essas notas, a árvore de pré-requisitos não é buscada.
 - Busca da cadeia completa de pré-requisitos de cada nota.
 - Ordenação pela ordem de implementação: notas mais profundas na árvore primeiro e, em caso de empate, pelo número da nota.
+- **Indicação de atividades manuais**: duas colunas do relatório mostram, como caixa de seleção, se a nota possui atividades manuais antes da implementação (pré) ou depois dela (pós).
 - Filtro opcional para ocultar notas já concluídas. Se a própria nota selecionada estiver concluída, os pré-requisitos dela nem chegam a ser buscados.
 - Remoção de notas repetidas, dentro de cada árvore e entre blocos de notas diferentes.
 - Destaque em cor da nota selecionada, exibida como última linha do seu bloco.
-- Cobertura por 19 testes unitários (ABAP Unit), sem acesso a banco de dados nem à tela.
+- Cobertura por 21 testes unitários (ABAP Unit), sem acesso a banco de dados nem à tela.
 
 ## Arquitetura
 
@@ -49,7 +54,7 @@ O programa separa regras de negócio, acesso a dados e apresentação por meio d
 |---|---|---|
 | `LCL_FABRICA_VERIFICADOR` | Classe (abstrata, final) | Único ponto de criação do verificador. Injeta as dependências produtivas ou as recebidas por parâmetro. |
 | `LIF_VERIFICADOR_NOTAS` / `LCL_VERIFICADOR_NOTAS` | Interface / Classe | Regras de negócio: seleção, ordenação, filtros e limpeza. `CREATE PRIVATE`, instanciada só pela fábrica. |
-| `LIF_REPOSITORIO_NOTAS` / `LCL_REPOSITORIO_NOTAS_SAP` | Interface / Classe | Acesso aos dados: tabela `CWBNTHEAD` e módulos de função da SNOTE. |
+| `LIF_REPOSITORIO_NOTAS` / `LCL_REPOSITORIO_NOTAS_SAP` | Interface / Classe | Acesso aos dados: tabela `CWBNTHEAD` e módulos de função da SNOTE, incluindo a determinação das atividades manuais. |
 | `LIF_EXIBIDOR_NOTAS` / `LCL_EXIBIDOR_ALV` | Interface / Classe | Apresentação: ALV com `CL_SALV_TABLE` e mensagens de status. |
 | `LCX_NOTA_NAO_ENCONTRADA` | Exceção (`CX_STATIC_CHECK`) | Sinaliza nota não carregada no sistema. |
 
@@ -77,6 +82,9 @@ classDiagram
         +exibir()
         +informar_sem_dados()
     }
+    class LCL_REPOSITORIO_NOTAS_SAP {
+        -determinar_ativ_manuais()
+    }
     LCL_FABRICA_VERIFICADOR ..> LCL_VERIFICADOR_NOTAS : cria
     LIF_VERIFICADOR_NOTAS <|.. LCL_VERIFICADOR_NOTAS
     LCL_VERIFICADOR_NOTAS --> LIF_REPOSITORIO_NOTAS : usa
@@ -96,12 +104,12 @@ flowchart TD
     A["Tela de seleção: S_NOTA e P_OCIMP"] --> B["Fábrica cria o verificador"]
     B --> C["Seleciona notas: CWBNTHEAD + valores I/EQ não carregados"]
     C --> D{"Próxima nota, em ordem crescente"}
-    D --> E["Lê a nota selecionada"]
-    E --> F{"P_OCIMP marcado e nota concluída?"}
+    D --> E["Lê a nota selecionada e as suas atividades manuais"]
+    E --> F{"Nota não carregada, ou P_OCIMP marcado e nota concluída?"}
     F -- Sim --> K["Bloco contém apenas a nota selecionada"]
     F -- Não --> G["Busca a árvore de pré-requisitos"]
     G --> H["Ordena por profundidade e remove repetidas"]
-    H --> I["Lê cada pré-requisito e aplica o filtro"]
+    H --> I["Lê cada pré-requisito e as suas atividades manuais e aplica o filtro"]
     I --> J["Nota selecionada no final do bloco, destacada"]
     J --> D
     K --> D
@@ -111,12 +119,32 @@ flowchart TD
     N -- Não --> P["Mensagem: nenhuma nota encontrada"]
 ```
 
+### Determinação das atividades manuais
+
+A leitura de cada nota, no método `ler_nota` do repositório, é complementada pelo método privado `determinar_ativ_manuais`:
+
+```mermaid
+flowchart TD
+    A["Nota lida com SCWB_NOTE_READ (atributos e status)"] --> B["Lê as instruções de correção da nota"]
+    B --> C{"Possui instruções de correção?"}
+    C -- Não --> Z["Indicadores permanecem desmarcados"]
+    C -- Sim --> D["Obtém a fila de implementação com SCWB_API_CINST_QUEUE_GET"]
+    D --> E{"Chamada bem-sucedida?"}
+    E -- Não --> Z
+    E -- Sim --> F["Para cada atividade manual da própria nota"]
+    F --> G{"Tipo B?"}
+    G -- Sim --> H["Marca atividade manual pré-implementação"]
+    G -- Não --> I["Marca atividade manual pós-implementação"]
+```
+
+<!-- TODO: confirmar o significado funcional do tipo 'B' (tratado no código como atividade manual antes da implementação) -->
+
 ## Tecnologias utilizadas
 
-- **ABAP 7.50+**, com sintaxe moderna: expressões construtoras (`VALUE`, `COND`, `REDUCE`, `CONV`), declarações inline e Open SQL com variáveis de host (`@`).
+- **ABAP 7.50+**, com sintaxe moderna: expressões construtoras (`VALUE`, `COND`, `REDUCE`, `CONV`, `CAST`), declarações inline e Open SQL com variáveis de host (`@`).
 - **ABAP Objects**: interfaces, classes locais, exceções baseadas em classe e `FRIENDS`.
-- **SAP List Viewer (SALV)**: `CL_SALV_TABLE` para o relatório.
-- **Note Assistant (SNOTE)**: tabela `CWBNTHEAD` e os módulos de função `SCWB_NOTE_READ` e `SCWB_CINST_PRECONDITION_DATA`.
+- **SAP List Viewer (SALV)**: `CL_SALV_TABLE` para o relatório, com colunas do tipo caixa de seleção.
+- **Note Assistant (SNOTE)**: tabela `CWBNTHEAD` e os módulos de função `SCWB_NOTE_READ`, `SCWB_CINST_PRECONDITION_DATA` e `SCWB_API_CINST_QUEUE_GET`.
 - **Conversion exits**: `CONVERSION_EXIT_CWBNT_OUTPUT` e `CONVERSION_EXIT_PSTAT_OUTPUT`, que convertem os códigos de status em texto.
 - **ABAP Unit**: testes unitários com dublês (stub e spy).
 - **ABAP Doc**: comentários `"!` nas interfaces e métodos.
@@ -132,7 +160,7 @@ Z_VERIF_NOTAS                     Programa executável (report)
 ├── LIF_REPOSITORIO_NOTAS         Contrato de acesso aos dados das notas
 ├── LIF_VERIFICADOR_NOTAS         Contrato do verificador e tipo da linha de saída
 ├── LIF_EXIBIDOR_NOTAS            Contrato de apresentação do resultado
-├── LCL_REPOSITORIO_NOTAS_SAP     Acesso produtivo: CWBNTHEAD e FMs SCWB_*
+├── LCL_REPOSITORIO_NOTAS_SAP     Acesso produtivo: CWBNTHEAD, FMs SCWB_* e atividades manuais
 ├── LCL_EXIBIDOR_ALV              Apresentação produtiva: CL_SALV_TABLE
 ├── LCL_VERIFICADOR_NOTAS         Regras de negócio
 ├── LCL_FABRICA_VERIFICADOR       Criação e injeção de dependências
@@ -140,7 +168,7 @@ Z_VERIF_NOTAS                     Programa executável (report)
 └── Testes unitários
     ├── LTD_REPOSITORIO_NOTAS     Repositório em memória com contagem de chamadas
     ├── LTD_EXIBIDOR_NOTAS        Exibidor espião (registra o que seria exibido)
-    └── LTC_VERIFICADOR_NOTAS     19 casos de teste
+    └── LTC_VERIFICADOR_NOTAS     21 casos de teste
 ```
 
 Estrutura sugerida do repositório:
@@ -162,8 +190,6 @@ Estrutura sugerida do repositório:
 - Note Assistant (SNOTE) disponível, com acesso à tabela `CWBNTHEAD` e aos módulos de função `SCWB_*`.
 - Permissão para criar e ativar programas no ambiente de desenvolvimento.
 
-<!-- TODO: confirmar se a busca de pré-requisitos de notas não carregadas exige conexão do sistema com o SAP Support Portal -->
-
 ### Instalação
 
 1. Na transação **SE38** (ou no ADT), crie o programa `Z_VERIF_NOTAS` do tipo **Programa executável**.
@@ -171,7 +197,7 @@ Estrutura sugerida do repositório:
 3. Crie os elementos de texto:
    - **Textos de seleção**: `S_NOTA` e `P_OCIMP`. <!-- TODO: informar os textos usados para S_NOTA e P_OCIMP -->
    - **Símbolos de texto** `B01` e `B02` (títulos dos blocos da tela), que não têm texto padrão no código. <!-- TODO: informar os títulos dos blocos B01 e B02 -->
-   - Os demais símbolos (`C01` a `C15`, `H01`, `M01`, `M02`, `T01`) já têm texto padrão no próprio código e podem ser criados a partir dos literais pela comparação de símbolos de texto do editor.
+   - Os demais símbolos (`C01` a `C21`, `H01`, `M01`, `M02`, `T01`) já têm texto padrão no próprio código e podem ser criados a partir dos literais pela comparação de símbolos de texto do editor. Confira se o comprimento definido para `C16` a `C21` comporta os textos das colunas de atividades manuais (até 34 caracteres).
 4. Ative o programa.
 5. (Opcional) Crie a transação `ZT_VERIF_NOTAS` na **SE93**, apontando para o programa.
 
@@ -200,8 +226,12 @@ Estrutura sugerida do repositório:
 | `STEXT` | Descrição | Visível |
 | `NTSTATUS` | Status de implementação (texto) | Visível |
 | `PRSTATUS` | Status de processamento (texto) | Visível |
+| `ATIV_MANUAL_PRE` | Possui atividade manual antes da implementação | Visível (caixa de seleção) |
+| `ATIV_MANUAL_POS` | Possui atividade manual depois da implementação | Visível (caixa de seleção) |
 | `NOTA_PRINC` | Nota selecionada a cujo bloco a linha pertence | Oculta, disponível pelo layout |
 | `NTSTATUS_COD` / `PRSTATUS_COD` | Códigos internos dos status | Técnicas (não exibidas) |
+
+Notas não carregadas no sistema aparecem com as colunas de atividades manuais desmarcadas, pois não há instruções de correção a avaliar.
 
 ## Exemplos de uso
 
@@ -213,7 +243,7 @@ Estrutura sugerida do repositório:
 | Intervalo (`BT`) | Processa as notas carregadas no sistema dentro do intervalo. |
 | Intervalo + exclusão (`E`) | As notas excluídas não são processadas, inclusive valores individuais. |
 
-> Intervalos amplos podem deixar a execução lenta, pois a árvore de pré-requisitos é determinada nota a nota.
+> Intervalos amplos podem deixar a execução lenta, pois a árvore de pré-requisitos e as atividades manuais são determinadas nota a nota.
 
 ### Ordem de exibição
 
@@ -226,6 +256,18 @@ Considere a árvore abaixo, usada nos testes unitários (as notas `100`, `200` e
 ```
 
 O relatório exibe `300`, `200` e `100`, nessa ordem: primeiro o que deve ser implementado antes. A nota `100` fecha o bloco, destacada em cor.
+
+### Leitura das atividades manuais
+
+Suponha que, na árvore acima, a nota `200` exija um ajuste antes da implementação e a nota `100` exija um passo após a implementação:
+
+| Nota | Ativ. manual pré | Ativ. manual pós |
+|---|---|---|
+| 300 | ☐ | ☐ |
+| 200 | ☑ | ☐ |
+| 100 | ☐ | ☑ |
+
+Com isso, quem vai implementar sabe de antemão que precisa consultar as instruções manuais da nota `200` antes de aplicá-la e as da nota `100` depois de aplicá-la.
 
 ### Ponto de entrada
 
@@ -255,24 +297,31 @@ DATA(lt_notas) = VALUE lif_repositorio_notas=>ty_r_nota(
 
 " Retorna as linhas já ordenadas, filtradas e sem repetições
 DATA(lt_saida) = lcl_fabrica_verificador=>criar( it_notas = lt_notas )->processar( ).
+
+" Notas que exigem alguma atividade manual
+DATA(lt_com_ativ_manual) = VALUE lif_verificador_notas=>ty_t_saida(
+                             FOR ls_saida IN lt_saida
+                             WHERE ( ativ_manual_pre = abap_true OR ativ_manual_pos = abap_true )
+                             ( ls_saida ) ).
 ```
 
 ## Testes unitários
 
-A classe `LTC_VERIFICADOR_NOTAS` contém 19 testes, agrupados em:
+A classe `LTC_VERIFICADOR_NOTAS` contém 21 testes, agrupados em:
 
 - **Seleção**: inclusão de notas não carregadas e respeito às exclusões.
-- **Ordenação e blocos**: profundidade, desempate por número, nota selecionada no final e destacada, remoção de repetidas, leitura única de cada nota, árvore vazia, referência cíclica e nota não carregada.
+- **Ordenação e blocos**: profundidade, desempate por número, nota selecionada no final e destacada, remoção de repetidas, leitura única de cada nota, árvore vazia, referência cíclica, nota não carregada e ausência de busca da árvore para nota não carregada.
+- **Atividades manuais**: indicadores pré e pós levados corretamente para a linha de saída, tanto do pré-requisito quanto da nota selecionada.
 - **Filtro `P_OCIMP`**: ocultação por status de implementação e de processamento, filtro desligado, e nota selecionada concluída sem busca da árvore.
 - **Limpeza final**: nota repetida entre blocos e transferência do destaque.
 - **Execução e fábrica**: exibição do resultado, mensagem sem dados e criação da instância.
 
-Os testes usam dublês injetados pela fábrica:
+Os testes usam dublês injetados pela fábrica. O repositório em memória permite registrar, para cada nota, o status e as atividades manuais:
 
 ```abap
 " Repositório em memória: nenhuma leitura de banco
-mo_repositorio->adicionar_nota( gc_n100 ).
-mo_repositorio->adicionar_nota( gc_n200 ).
+mo_repositorio->adicionar_nota( iv_nota = gc_n100 iv_ativ_pos = abap_true ).
+mo_repositorio->adicionar_nota( iv_nota = gc_n200 iv_ativ_pre = abap_true ).
 mo_repositorio->adicionar_arvore(
   iv_nota = gc_n100
   it_nos  = VALUE #( ( no( iv_aleid = '1' iv_nota = gc_n100 ) )
@@ -285,6 +334,8 @@ DATA(lt_saida) = lcl_fabrica_verificador=>criar( it_notas       = r_nota( gc_n10
 ```
 
 Para executar: **Ctrl+Shift+F10** (Programa > Executar > Testes unitários) na SE38/SE80, ou pelo ADT.
+
+> A lógica de `determinar_ativ_manuais` depende dos módulos de função da SNOTE e, por isso, fica no repositório produtivo, fora do alcance dos testes unitários. Os testes cobrem o transporte dos indicadores até a saída; a determinação em si deve ser validada em um sistema real.
 
 ## Decisões técnicas
 
@@ -307,6 +358,14 @@ As repetições são removidas na árvore, antes da leitura dos atributos, e nov
 ### 5. Filtro por código de status, não por texto
 
 Os códigos internos ficam em colunas técnicas (`NTSTATUS_COD`, `PRSTATUS_COD`), separados dos textos exibidos. **Por quê:** os textos vêm de conversion exits e podem variar conforme o idioma de logon; o código é estável. Além disso, quando a nota selecionada já está concluída e o filtro está ativo, a árvore de pré-requisitos nem é buscada, evitando uma chamada custosa sem utilidade.
+
+### 6. Atividades manuais determinadas de forma tolerante a falhas
+
+A leitura principal da nota (atributos e status) é separada da leitura das instruções de correção e da fila de implementação. Qualquer falha nessa segunda etapa apenas deixa os indicadores desmarcados. **Por quê:** uma nota sem instruções de correção, ou cuja fila não possa ser calculada, continua sendo uma nota carregada. Se tudo fosse lido em uma única chamada, uma exceção nas instruções de correção faria a nota aparecer, incorretamente, como "não carregada no sistema". A fila retornada por `SCWB_API_CINST_QUEUE_GET` pode incluir instruções de pré-requisitos, por isso só são consideradas as atividades cujas instruções pertencem à própria nota. Isso evita que uma atividade manual de outra nota seja atribuída à linha errada.
+
+### 7. Árvore não buscada para notas não carregadas
+
+Quando a nota selecionada não está carregada na SNOTE, o programa exibe apenas a própria nota e não chama `SCWB_CINST_PRECONDITION_DATA`. **Por quê:** sem as instruções de correção da nota, não há como determinar os pré-requisitos, e a chamada poderia disparar a tentativa de download da nota. A regra é identificada pela ausência de versão (`VERSNO`), já que toda nota carregada tem versão, e é coberta por teste.
 
 ## Autor
 
