@@ -17,7 +17,6 @@ Programa ABAP que recebe uma lista de Notas SAP e mostra, em uma única tela, to
 - [Exemplos de uso](#exemplos-de-uso)
 - [Testes unitários](#testes-unitários)
 - [Decisões técnicas](#decisões-técnicas)
-- [Melhorias futuras](#melhorias-futuras)
 - [Autor](#autor)
 - [Licença](#licença)
 
