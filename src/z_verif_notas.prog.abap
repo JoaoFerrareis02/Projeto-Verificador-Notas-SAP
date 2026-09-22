@@ -10,8 +10,8 @@
 *&   A partir das Notas SAP informadas na tela de seleção (valores
 *&   individuais, intervalos ou padrões), identificar todas as notas
 *&   pré-requisito (diretas e indiretas) de cada uma e exibir, em ALV,
-*&   os dados e status no sistema (status de implementação e status de
-*&   processamento, conforme SNOTE).
+*&   os dados e status no sistema (status de implementação, status de
+*&   processamento e existência de atividades manuais, conforme SNOTE).
 *&
 *& Arquitetura (padrão Factory + injeção de dependências):
 *&   - LCL_FABRICA_VERIFICADOR : único ponto de criação do verificador.
@@ -33,11 +33,14 @@
 *&      - valores individuais (I/EQ) de S_NOTA ainda não carregados, que
 *&        são exibidos com a indicação "Nota não carregada no sistema".
 *&   2. Para cada nota selecionada, em ordem crescente:
-*&      a. Leitura da nota (FM SCWB_NOTE_READ).
-*&      b. Se o filtro P_OCIMP estiver marcado e a nota tiver status de
-*&         implementação 'A' ou status de processamento 'E', somente
-*&         ela é exibida: os pré-requisitos não são buscados (passos c
-*&         a f são ignorados).
+*&      a. Leitura da nota (FM SCWB_NOTE_READ) e das suas atividades
+*&         manuais (FM SCWB_API_CINST_QUEUE_GET).
+*&      b. Somente a própria nota é exibida (passos c a f ignorados)
+*&         quando:
+*&         - ela não está carregada no sistema (sem instruções de
+*&           correção não há como determinar os pré-requisitos); ou
+*&         - o filtro P_OCIMP está marcado e a nota tem status de
+*&           implementação 'A' ou status de processamento 'E'.
 *&      c. Busca da árvore de pré-requisitos
 *&         (FM SCWB_CINST_PRECONDITION_DATA).
 *&      d. Ordenação pela ordem de implementação: notas mais profundas
@@ -55,7 +58,10 @@
 *&      removida for uma nota selecionada, o destaque em cor é
 *&      transferido para a ocorrência mantida.
 *&   4. Exibição em ALV (CL_SALV_TABLE). A coluna NOTA_PRINC indica a
-*&      nota selecionada a cujo bloco a linha pertence.
+*&      nota selecionada a cujo bloco a linha pertence. As colunas
+*&      ATIV_MANUAL_PRE e ATIV_MANUAL_POS indicam, como caixa de
+*&      seleção, se a nota possui atividades manuais antes/depois da
+*&      implementação.
 *&
 *& Observações:
 *&   - Notas pré-requisito ainda não carregadas no sistema (SNOTE) são
@@ -64,11 +70,14 @@
 *&   - Se a árvore de pré-requisitos de uma nota não puder ser
 *&     determinada (ex.: nota sem instruções de correção), apenas a
 *&     própria nota é exibida no seu bloco.
+*&   - Falhas na determinação das atividades manuais não impedem a
+*&     exibição da nota: as colunas correspondentes ficam desmarcadas.
 *&   - Os códigos internos dos status são mantidos nas colunas técnicas
 *&     NTSTATUS_COD e PRSTATUS_COD (ocultas no ALV), pois as colunas
 *&     NTSTATUS e PRSTATUS contêm os textos já convertidos.
 *&   - Intervalos amplos em S_NOTA podem gerar tempo de execução alto,
-*&     pois a árvore de pré-requisitos é determinada nota a nota.
+*&     pois a árvore de pré-requisitos e as atividades manuais são
+*&     determinadas nota a nota.
 *&   - Requer release ABAP 7.50 ou superior (Open SQL com INTO no final
 *&     do comando e IS INSTANCE OF nos testes).
 *&   - Testes unitários: Ctrl+Shift+F10 (Programa > Executar > Testes
@@ -116,15 +125,17 @@ INTERFACE lif_repositorio_notas.
     ty_t_notas TYPE SORTED TABLE OF cwbntnumm WITH UNIQUE KEY table_line,
     "! Dados de uma nota lida no sistema
     BEGIN OF ty_s_nota,
-      numm         TYPE bcwbn_note-key-numm,
-      versno       TYPE bcwbn_note-key-versno,
-      themk        TYPE bcwbn_note-attributes-themk,
-      langu        TYPE bcwbn_note-langu,
-      stext        TYPE bcwbn_note-stext,
-      ntstatus_cod TYPE bcwbn_note-customer_attributes-ntstatus,
-      prstatus_cod TYPE bcwbn_note-customer_attributes-prstatus,
-      ntstatus_txt TYPE char40,
-      prstatus_txt TYPE char40,
+      numm            TYPE bcwbn_note-key-numm,
+      versno          TYPE bcwbn_note-key-versno,
+      themk           TYPE bcwbn_note-attributes-themk,
+      langu           TYPE bcwbn_note-langu,
+      stext           TYPE bcwbn_note-stext,
+      ntstatus_cod    TYPE bcwbn_note-customer_attributes-ntstatus,
+      prstatus_cod    TYPE bcwbn_note-customer_attributes-prstatus,
+      ntstatus_txt    TYPE char40,
+      prstatus_txt    TYPE char40,
+      ativ_manual_pre TYPE abap_bool,   " Possui atividade manual antes da implementação
+      ativ_manual_pos TYPE abap_bool,   " Possui atividade manual após a implementação
     END OF ty_s_nota.
 
   "! Notas carregadas no sistema que atendem ao critério.
@@ -136,7 +147,8 @@ INTERFACE lif_repositorio_notas.
     RETURNING
       VALUE(rt_notas) TYPE ty_t_notas.
 
-  "! Lê atributos e status (código e texto) de uma nota.
+  "! Lê atributos, status (código e texto) e atividades manuais de uma
+  "! nota.
   "! @parameter iv_nota                  | Número da nota
   "! @parameter rs_nota                  | Dados da nota
   "! @raising   lcx_nota_nao_encontrada  | Nota não carregada
@@ -168,17 +180,19 @@ INTERFACE lif_verificador_notas.
   TYPES:
     "! Linha de saída
     BEGIN OF ty_s_saida,
-      nota_princ   TYPE cwbntnumm,                               " Nota selecionada (bloco)
-      numm         TYPE bcwbn_note-key-numm,
-      versno       TYPE bcwbn_note-key-versno,
-      themk        TYPE bcwbn_note-attributes-themk,
-      langu        TYPE bcwbn_note-langu,
-      stext        TYPE bcwbn_note-stext,
-      ntstatus     TYPE char40,
-      prstatus     TYPE char40,
-      ntstatus_cod TYPE bcwbn_note-customer_attributes-ntstatus, " Código interno (técnica)
-      prstatus_cod TYPE bcwbn_note-customer_attributes-prstatus, " Código interno (técnica)
-      t_color      TYPE lvc_t_scol,                              " Cores da linha (oculta)
+      nota_princ      TYPE cwbntnumm,                               " Nota selecionada (bloco)
+      numm            TYPE bcwbn_note-key-numm,
+      versno          TYPE bcwbn_note-key-versno,
+      themk           TYPE bcwbn_note-attributes-themk,
+      langu           TYPE bcwbn_note-langu,
+      stext           TYPE bcwbn_note-stext,
+      ntstatus        TYPE char40,
+      prstatus        TYPE char40,
+      ativ_manual_pre TYPE abap_bool,                               " Atividade manual pré-implementação
+      ativ_manual_pos TYPE abap_bool,                               " Atividade manual pós-implementação
+      ntstatus_cod    TYPE bcwbn_note-customer_attributes-ntstatus, " Código interno (técnica)
+      prstatus_cod    TYPE bcwbn_note-customer_attributes-prstatus, " Código interno (técnica)
+      t_color         TYPE lvc_t_scol,                              " Cores da linha (oculta)
     END OF ty_s_saida,
     "! Tabela de saída
     ty_t_saida TYPE STANDARD TABLE OF ty_s_saida WITH EMPTY KEY.
@@ -220,6 +234,23 @@ CLASS lcl_repositorio_notas_sap DEFINITION FINAL CREATE PUBLIC.
   PUBLIC SECTION.
     INTERFACES lif_repositorio_notas.
 
+  PRIVATE SECTION.
+
+    CONSTANTS:
+      "! Tipo de atividade manual executada antes da implementação
+      gc_ativ_manual_antes TYPE scwb_api_correction_instr-type VALUE 'B'.
+
+    "! Determina se a nota possui atividades manuais antes/depois da
+    "! implementação. Erros na determinação não interrompem a leitura
+    "! da nota: os indicadores apenas permanecem desmarcados.
+    "! @parameter is_nota | Nota já lida (chave e versão preenchidas)
+    "! @parameter cs_nota | Dados da nota (indicadores preenchidos)
+    METHODS determinar_ativ_manuais
+      IMPORTING
+        is_nota TYPE bcwbn_note
+      CHANGING
+        cs_nota TYPE lif_repositorio_notas=>ty_s_nota.
+
 ENDCLASS.
 
 *----------------------------------------------------------------------*
@@ -243,6 +274,8 @@ CLASS lcl_repositorio_notas_sap IMPLEMENTATION.
 
     ls_nota-key-numm = iv_nota.
 
+    " As instruções de correção não são lidas aqui: uma nota sem
+    " instruções não deve ser tratada como "não carregada"
     CALL FUNCTION 'SCWB_NOTE_READ'
       EXPORTING
         iv_read_attributes          = abap_true
@@ -280,6 +313,80 @@ CLASS lcl_repositorio_notas_sap IMPLEMENTATION.
         input  = rs_nota-prstatus_cod
       IMPORTING
         output = rs_nota-prstatus_txt.
+
+    determinar_ativ_manuais(
+      EXPORTING
+        is_nota = ls_nota
+      CHANGING
+        cs_nota = rs_nota ).
+
+  ENDMETHOD.
+
+
+  METHOD determinar_ativ_manuais.
+
+    DATA ls_nota              TYPE bcwbn_note.
+    DATA lt_notas             TYPE scwb_api_notenumbers.
+    DATA lt_component_vector  TYPE STANDARD TABLE OF scwb_api_comp_vector.
+    DATA lt_manual_activities TYPE scwb_api_t_correction_instr.
+
+    " Instruções de correção da nota (chave e versão já determinadas)
+    ls_nota = is_nota.
+
+    CALL FUNCTION 'SCWB_NOTE_READ'
+      EXPORTING
+        iv_read_corr_instructions = abap_true
+      CHANGING
+        cs_note                   = ls_nota
+      EXCEPTIONS
+        OTHERS                    = 1.
+
+    " Sem instruções de correção não há fila de implementação a avaliar
+    IF sy-subrc <> 0 OR ls_nota-corr_instructions IS INITIAL.
+      RETURN.
+    ENDIF.
+
+    APPEND is_nota-key-numm TO lt_notas.
+
+    CALL FUNCTION 'SCWB_API_CINST_QUEUE_GET'
+      IMPORTING
+        et_manual_activities       = lt_manual_activities
+      TABLES
+        it_notes                   = lt_notas
+        it_component_vector_target = lt_component_vector
+      EXCEPTIONS
+        OTHERS                     = 1.
+
+    IF sy-subrc <> 0.
+      RETURN.
+    ENDIF.
+
+    LOOP AT lt_manual_activities ASSIGNING FIELD-SYMBOL(<ls_ativ_manual>)
+         WHERE manual_activity IS NOT INITIAL.
+
+      " A fila pode conter instruções de pré-requisitos: considera
+      " somente as instruções de correção da própria nota
+      READ TABLE ls_nota-corr_instructions TRANSPORTING NO FIELDS
+           WITH KEY key-insta  = <ls_ativ_manual>-insta
+                    key-pakid  = <ls_ativ_manual>-pakid
+                    key-aleid  = <ls_ativ_manual>-aleid
+                    key-versno = <ls_ativ_manual>-versno.
+      IF sy-subrc <> 0.
+        CONTINUE.
+      ENDIF.
+
+      IF <ls_ativ_manual>-type = gc_ativ_manual_antes.
+        cs_nota-ativ_manual_pre = abap_true.
+      ELSE.
+        cs_nota-ativ_manual_pos = abap_true.
+      ENDIF.
+
+      " Ambos os indicadores já determinados: nada mais a avaliar
+      IF cs_nota-ativ_manual_pre = abap_true AND cs_nota-ativ_manual_pos = abap_true.
+        EXIT.
+      ENDIF.
+
+    ENDLOOP.
 
   ENDMETHOD.
 
@@ -325,13 +432,17 @@ CLASS lcl_exibidor_alv DEFINITION FINAL CREATE PUBLIC.
 
     CONSTANTS:
       "! Nome técnico da coluna de cores na estrutura de saída
-      gc_coluna_cor             TYPE lvc_fname VALUE 'T_COLOR',
+      gc_coluna_cor           TYPE lvc_fname VALUE 'T_COLOR',
       "! Nome técnico da coluna com o código do status de implementação
-      gc_coluna_nt_status_cod   TYPE lvc_fname VALUE 'NTSTATUS_COD',
+      gc_coluna_nt_status_cod TYPE lvc_fname VALUE 'NTSTATUS_COD',
       "! Nome técnico da coluna com o código do status de processamento
-      gc_coluna_pr_status_cod   TYPE lvc_fname VALUE 'PRSTATUS_COD',
+      gc_coluna_pr_status_cod TYPE lvc_fname VALUE 'PRSTATUS_COD',
       "! Nome técnico da coluna com a nota selecionada (bloco)
-      gc_coluna_nota_princ      TYPE lvc_fname VALUE 'NOTA_PRINC'.
+      gc_coluna_nota_princ    TYPE lvc_fname VALUE 'NOTA_PRINC',
+      "! Nome técnico da coluna de atividade manual pré-implementação
+      gc_coluna_ativ_pre      TYPE lvc_fname VALUE 'ATIV_MANUAL_PRE',
+      "! Nome técnico da coluna de atividade manual pós-implementação
+      gc_coluna_ativ_pos      TYPE lvc_fname VALUE 'ATIV_MANUAL_POS'.
 
     "! Cópia dos dados exibidos (CL_SALV_TABLE exige referência viva)
     DATA mt_saida TYPE lif_verificador_notas=>ty_t_saida.
@@ -346,9 +457,9 @@ CLASS lcl_exibidor_alv DEFINITION FINAL CREATE PUBLIC.
     "! Define os textos de cabeçalho de uma coluna do ALV.
     "! @parameter io_colunas | Colunas do ALV
     "! @parameter iv_coluna  | Nome técnico da coluna
-    "! @parameter iv_curto   | Texto curto
-    "! @parameter iv_medio   | Texto médio
-    "! @parameter iv_longo   | Texto longo
+    "! @parameter iv_curto   | Texto curto (até 10 caracteres)
+    "! @parameter iv_medio   | Texto médio (até 20 caracteres)
+    "! @parameter iv_longo   | Texto longo (até 40 caracteres)
     METHODS configurar_coluna
       IMPORTING
         io_colunas TYPE REF TO cl_salv_columns_table
@@ -356,6 +467,14 @@ CLASS lcl_exibidor_alv DEFINITION FINAL CREATE PUBLIC.
         iv_curto   TYPE csequence
         iv_medio   TYPE csequence
         iv_longo   TYPE csequence.
+
+    "! Exibe uma coluna como caixa de seleção (somente leitura).
+    "! @parameter io_colunas | Colunas do ALV
+    "! @parameter iv_coluna  | Nome técnico da coluna
+    METHODS configurar_caixa_selecao
+      IMPORTING
+        io_colunas TYPE REF TO cl_salv_columns_table
+        iv_coluna  TYPE lvc_fname.
 
 ENDCLASS.
 
@@ -465,6 +584,19 @@ CLASS lcl_exibidor_alv IMPLEMENTATION.
                        iv_medio   = 'Status processamento'(c12)
                        iv_longo   = 'Status de processamento'(c13) ).
 
+    configurar_coluna( io_colunas = io_colunas iv_coluna = gc_coluna_ativ_pre
+                       iv_curto   = 'Ativ.Pré'(c16)
+                       iv_medio   = 'Ativ. manual pré'(c17)
+                       iv_longo   = 'Atividade manual pré-implementação'(c18) ).
+
+    configurar_coluna( io_colunas = io_colunas iv_coluna = gc_coluna_ativ_pos
+                       iv_curto   = 'Ativ.Pós'(c19)
+                       iv_medio   = 'Ativ. manual pós'(c20)
+                       iv_longo   = 'Atividade manual pós-implementação'(c21) ).
+
+    configurar_caixa_selecao( io_colunas = io_colunas iv_coluna = gc_coluna_ativ_pre ).
+    configurar_caixa_selecao( io_colunas = io_colunas iv_coluna = gc_coluna_ativ_pos ).
+
   ENDMETHOD.
 
 
@@ -477,6 +609,18 @@ CLASS lcl_exibidor_alv IMPLEMENTATION.
         lo_coluna->set_long_text( CONV scrtext_l( iv_longo ) ).
       CATCH cx_salv_not_found.
         " Coluna inexistente na estrutura de saída: mantém textos padrão
+    ENDTRY.
+
+  ENDMETHOD.
+
+
+  METHOD configurar_caixa_selecao.
+
+    TRY.
+        CAST cl_salv_column_table( io_colunas->get_column( iv_coluna )
+          )->set_cell_type( if_salv_c_cell_type=>checkbox ).
+      CATCH cx_salv_not_found.
+        " Coluna inexistente na estrutura de saída: mantém exibição padrão
     ENDTRY.
 
   ENDMETHOD.
@@ -576,6 +720,16 @@ CLASS lcl_verificador_notas DEFINITION FINAL
         is_saida          TYPE lif_verificador_notas=>ty_s_saida
       RETURNING
         VALUE(rv_ocultar) TYPE abap_bool.
+
+    "! Indica se a nota da linha está carregada no sistema (SNOTE).
+    "! Notas carregadas sempre possuem versão.
+    "! @parameter is_saida     | Linha de saída
+    "! @parameter rv_carregada | abap_true = nota carregada
+    METHODS esta_carregada
+      IMPORTING
+        is_saida            TYPE lif_verificador_notas=>ty_s_saida
+      RETURNING
+        VALUE(rv_carregada) TYPE abap_bool.
 
     "! Ordena a árvore pela ordem de implementação, remove a própria
     "! nota e as repetições.
@@ -751,10 +905,13 @@ CLASS lcl_verificador_notas IMPLEMENTATION.
 
     DATA(ls_nota_principal) = ler_nota_principal( iv_nota ).
 
-    IF deve_ocultar( ls_nota_principal ) = abap_true.
-      " Nota já concluída: pré-requisitos não são relevantes e nem
-      " chegam a ser buscados. A própria nota permanece na lista para
-      " indicar o seu status.
+    " Nota não carregada: sem instruções de correção não há árvore a
+    " determinar (e a busca poderia disparar o download da nota).
+    " Nota já concluída (filtro P_OCIMP): pré-requisitos não são
+    " relevantes. Em ambos os casos a própria nota permanece na lista
+    " para indicar o seu status.
+    IF esta_carregada( ls_nota_principal ) = abap_false
+       OR deve_ocultar( ls_nota_principal ) = abap_true.
       rt_saida = VALUE #( ( ls_nota_principal ) ).
       RETURN.
     ENDIF.
@@ -797,6 +954,11 @@ CLASS lcl_verificador_notas IMPLEMENTATION.
                           AND (    is_saida-ntstatus_cod = gc_status_impl_ocultar
                                 OR is_saida-prstatus_cod = gc_status_proc_ocultar ) ).
 
+  ENDMETHOD.
+
+
+  METHOD esta_carregada.
+    rv_carregada = xsdbool( is_saida-versno IS NOT INITIAL ).
   ENDMETHOD.
 
 
@@ -908,16 +1070,18 @@ CLASS lcl_verificador_notas IMPLEMENTATION.
         RETURN.
     ENDTRY.
 
-    rs_saida = VALUE #( nota_princ   = iv_nota_principal
-                        numm         = ls_nota-numm
-                        versno       = ls_nota-versno
-                        themk        = ls_nota-themk
-                        langu        = ls_nota-langu
-                        stext        = ls_nota-stext
-                        ntstatus     = ls_nota-ntstatus_txt
-                        prstatus     = ls_nota-prstatus_txt
-                        ntstatus_cod = ls_nota-ntstatus_cod
-                        prstatus_cod = ls_nota-prstatus_cod ).
+    rs_saida = VALUE #( nota_princ      = iv_nota_principal
+                        numm            = ls_nota-numm
+                        versno          = ls_nota-versno
+                        themk           = ls_nota-themk
+                        langu           = ls_nota-langu
+                        stext           = ls_nota-stext
+                        ntstatus        = ls_nota-ntstatus_txt
+                        prstatus        = ls_nota-prstatus_txt
+                        ativ_manual_pre = ls_nota-ativ_manual_pre
+                        ativ_manual_pos = ls_nota-ativ_manual_pos
+                        ntstatus_cod    = ls_nota-ntstatus_cod
+                        prstatus_cod    = ls_nota-prstatus_cod ).
 
   ENDMETHOD.
 
@@ -943,7 +1107,7 @@ START-OF-SELECTION.
 *----------------------------------------------------------------------*
 * Dublê LTD_REPOSITORIO_NOTAS
 *----------------------------------------------------------------------*
-"! Repositório em memória: substitui CWBNTHEAD e os FMs da SNOTE.
+  "! Repositório em memória: substitui CWBNTHEAD e os FMs da SNOTE.
 CLASS ltd_repositorio_notas DEFINITION FINAL FOR TESTING.
 
   PUBLIC SECTION.
@@ -955,7 +1119,9 @@ CLASS ltd_repositorio_notas DEFINITION FINAL FOR TESTING.
       IMPORTING
         iv_nota     TYPE cwbntnumm
         iv_ntstatus TYPE lif_repositorio_notas=>ty_s_nota-ntstatus_cod DEFAULT space
-        iv_prstatus TYPE lif_repositorio_notas=>ty_s_nota-prstatus_cod DEFAULT space.
+        iv_prstatus TYPE lif_repositorio_notas=>ty_s_nota-prstatus_cod DEFAULT space
+        iv_ativ_pre TYPE abap_bool DEFAULT abap_false
+        iv_ativ_pos TYPE abap_bool DEFAULT abap_false.
 
     "! Registra a árvore de pré-requisitos de uma nota.
     METHODS adicionar_arvore
@@ -999,13 +1165,15 @@ CLASS ltd_repositorio_notas IMPLEMENTATION.
 
   METHOD adicionar_nota.
     INSERT iv_nota INTO TABLE mt_carregadas.
-    INSERT VALUE #( numm         = iv_nota
-                    versno       = 1
-                    stext        = |Nota { iv_nota }|
-                    ntstatus_cod = iv_ntstatus
-                    prstatus_cod = iv_prstatus
-                    ntstatus_txt = |Impl. { iv_ntstatus }|
-                    prstatus_txt = |Proc. { iv_prstatus }| ) INTO TABLE mt_notas.
+    INSERT VALUE #( numm            = iv_nota
+                    versno          = 1
+                    stext           = |Nota { iv_nota }|
+                    ntstatus_cod    = iv_ntstatus
+                    prstatus_cod    = iv_prstatus
+                    ntstatus_txt    = |Impl. { iv_ntstatus }|
+                    prstatus_txt    = |Proc. { iv_prstatus }|
+                    ativ_manual_pre = iv_ativ_pre
+                    ativ_manual_pos = iv_ativ_pos ) INTO TABLE mt_notas.
   ENDMETHOD.
 
 
@@ -1147,6 +1315,9 @@ CLASS ltc_verificador_notas DEFINITION FINAL FOR TESTING
     METHODS arvore_vazia_so_principal    FOR TESTING.
     METHODS ciclo_nao_trava              FOR TESTING.
     METHODS nota_nao_carregada           FOR TESTING.
+    METHODS nao_carregada_sem_busca      FOR TESTING.
+    " Atividades manuais
+    METHODS ativ_manuais_na_saida        FOR TESTING.
     " Filtro P_OCIMP
     METHODS filtro_oculta_prereq_impl    FOR TESTING.
     METHODS filtro_oculta_prereq_proc    FOR TESTING.
@@ -1378,6 +1549,51 @@ CLASS ltc_verificador_notas IMPLEMENTATION.
                                              msg = 'Deve indicar que a nota não está carregada' ).
     cl_abap_unit_assert=>assert_not_initial( act = lt_saida[ 1 ]-t_color
                                              msg = 'Nota selecionada deve estar destacada' ).
+
+  ENDMETHOD.
+
+
+  METHOD nao_carregada_sem_busca.
+
+    " Mesmo que houvesse árvore registrada, a nota não carregada não
+    " deve disparar a busca de pré-requisitos
+    mo_repositorio->adicionar_arvore( iv_nota = gc_n900
+                                      it_nos  = VALUE #( ( no( iv_aleid = '1' iv_nota = gc_n900 ) )
+                                                         ( no( iv_aleid = '2' iv_pai = '1' iv_nota = gc_n200 ) ) ) ).
+
+    DATA(lt_saida) = criar_verificador( r_nota( gc_n900 ) )->processar( ).
+
+    cl_abap_unit_assert=>assert_equals(
+      exp = VALUE ty_t_numm( ( gc_n900 ) )
+      act = notas_da_saida( lt_saida )
+      msg = 'Nota não carregada deve ser exibida sozinha' ).
+    cl_abap_unit_assert=>assert_equals(
+      exp = 0
+      act = mo_repositorio->quantidade_buscas( gc_n900 )
+      msg = 'Árvore de nota não carregada não deve ser buscada' ).
+
+  ENDMETHOD.
+
+
+  METHOD ativ_manuais_na_saida.
+
+    mo_repositorio->adicionar_nota( iv_nota = gc_n100 iv_ativ_pos = abap_true ).
+    mo_repositorio->adicionar_nota( iv_nota = gc_n200 iv_ativ_pre = abap_true ).
+    mo_repositorio->adicionar_arvore( iv_nota = gc_n100
+                                      it_nos  = VALUE #( ( no( iv_aleid = '1' iv_nota = gc_n100 ) )
+                                                         ( no( iv_aleid = '2' iv_pai = '1' iv_nota = gc_n200 ) ) ) ).
+
+    DATA(lt_saida) = criar_verificador( r_nota( gc_n100 ) )->processar( ).
+
+    cl_abap_unit_assert=>assert_equals( exp = 2 act = lines( lt_saida ) ).
+    cl_abap_unit_assert=>assert_true( act = lt_saida[ 1 ]-ativ_manual_pre
+                                      msg = 'Atividade manual pré do pré-requisito deve ser exibida' ).
+    cl_abap_unit_assert=>assert_false( act = lt_saida[ 1 ]-ativ_manual_pos
+                                       msg = 'Pré-requisito não possui atividade manual pós' ).
+    cl_abap_unit_assert=>assert_false( act = lt_saida[ 2 ]-ativ_manual_pre
+                                       msg = 'Nota principal não possui atividade manual pré' ).
+    cl_abap_unit_assert=>assert_true( act = lt_saida[ 2 ]-ativ_manual_pos
+                                      msg = 'Atividade manual pós da nota principal deve ser exibida' ).
 
   ENDMETHOD.
 

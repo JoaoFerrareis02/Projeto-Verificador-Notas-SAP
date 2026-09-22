@@ -114,6 +114,42 @@
     </item>
     <item>
      <ID>I</ID>
+     <KEY>C16</KEY>
+     <ENTRY>Ativ.Pré</ENTRY>
+     <LENGTH>18</LENGTH>
+    </item>
+    <item>
+     <ID>I</ID>
+     <KEY>C17</KEY>
+     <ENTRY>Ativ. manual pré?</ENTRY>
+     <LENGTH>26</LENGTH>
+    </item>
+    <item>
+     <ID>I</ID>
+     <KEY>C18</KEY>
+     <ENTRY>Atividade manual pré-implementação?</ENTRY>
+     <LENGTH>68</LENGTH>
+    </item>
+    <item>
+     <ID>I</ID>
+     <KEY>C19</KEY>
+     <ENTRY>Ativ.Pós</ENTRY>
+     <LENGTH>18</LENGTH>
+    </item>
+    <item>
+     <ID>I</ID>
+     <KEY>C20</KEY>
+     <ENTRY>Ativ. manual pós?</ENTRY>
+     <LENGTH>26</LENGTH>
+    </item>
+    <item>
+     <ID>I</ID>
+     <KEY>C21</KEY>
+     <ENTRY>Atividade manual pós-implementação?</ENTRY>
+     <LENGTH>68</LENGTH>
+    </item>
+    <item>
+     <ID>I</ID>
      <KEY>H01</KEY>
      <ENTRY>Notas SAP e pré-requisitos</ENTRY>
      <LENGTH>52</LENGTH>
@@ -259,6 +295,42 @@
        <KEY>C15</KEY>
        <ENTRY>Main note</ENTRY>
        <LENGTH>24</LENGTH>
+      </item>
+      <item>
+       <ID>I</ID>
+       <KEY>C16</KEY>
+       <ENTRY>Pre. Activ.</ENTRY>
+       <LENGTH>18</LENGTH>
+      </item>
+      <item>
+       <ID>I</ID>
+       <KEY>C17</KEY>
+       <ENTRY>Pre Manual Activity?</ENTRY>
+       <LENGTH>26</LENGTH>
+      </item>
+      <item>
+       <ID>I</ID>
+       <KEY>C18</KEY>
+       <ENTRY>Pre Manual Activity?</ENTRY>
+       <LENGTH>68</LENGTH>
+      </item>
+      <item>
+       <ID>I</ID>
+       <KEY>C19</KEY>
+       <ENTRY>Pos. Activ.</ENTRY>
+       <LENGTH>18</LENGTH>
+      </item>
+      <item>
+       <ID>I</ID>
+       <KEY>C20</KEY>
+       <ENTRY>Post Manual Activity?</ENTRY>
+       <LENGTH>26</LENGTH>
+      </item>
+      <item>
+       <ID>I</ID>
+       <KEY>C21</KEY>
+       <ENTRY>Post Manual Activity?</ENTRY>
+       <LENGTH>68</LENGTH>
       </item>
       <item>
        <ID>I</ID>
