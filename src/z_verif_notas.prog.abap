@@ -113,7 +113,7 @@ DATA gv_sel_nota TYPE cwbntnumm.
 * Tela de seleção
 *----------------------------------------------------------------------*
 SELECTION-SCREEN BEGIN OF BLOCK b01 WITH FRAME TITLE TEXT-b01.
-SELECT-OPTIONS s_nota FOR gv_sel_nota OBLIGATORY.
+SELECT-OPTIONS s_nota FOR gv_sel_nota.
 SELECTION-SCREEN END OF BLOCK b01.
 
 SELECTION-SCREEN BEGIN OF BLOCK b02 WITH FRAME TITLE TEXT-b02.
